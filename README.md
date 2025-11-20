@@ -1,4 +1,6 @@
-﻿# AI-Research-Assistant
+![Uploading image.png…]()
+
+ # AI-Research-Assistant
 AI-Research-Assistant
 
 AI-Research-Assistant is a Wikipedia-only multi-agent research tool available in two forms:
@@ -196,3 +198,4 @@ Add local embeddings & offline mode
 📝 License
 
 You may include your preferred license here (MIT recommended).
+
