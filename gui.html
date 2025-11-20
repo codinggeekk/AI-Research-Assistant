@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>WikiResearchAssistant — GUI</title>
+  <style>
+    :root{--bg:#0f1724;--card:#0b1220;--muted:#94a3b8;--accent:#7c3aed;--glass:rgba(255,255,255,0.04)}
+    html,body{height:100%;margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial}
+    body{background:linear-gradient(180deg,#041024 0%, #0b1220 60%);color:#e6eef8;display:flex;align-items:center;justify-content:center;padding:28px}
+    .app{width:100%;max-width:980px;border-radius:14px;padding:20px;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));box-shadow:0 10px 30px rgba(2,6,23,0.6)}
+    header{display:flex;gap:16px;align-items:center;margin-bottom:18px}
+    h1{font-size:20px;margin:0}
+    p.lead{margin:0;color:var(--muted);font-size:13px}
+
+    .controls{display:grid;grid-template-columns:1fr auto;gap:12px;margin-top:14px}
+    input[type=text]{width:100%;padding:12px 14px;border-radius:10px;border:1px solid rgba(255,255,255,0.04);background:var(--glass);color:inherit;outline:none}
+    button{background:var(--accent);border:none;color:white;padding:10px 14px;border-radius:10px;cursor:pointer;font-weight:600}
+    button.secondary{background:transparent;border:1px solid rgba(255,255,255,0.06);color:var(--muted)}
+
+    .main{display:grid;grid-template-columns:1fr 420px;gap:16px;margin-top:18px}
+    .card{background:linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.005));padding:14px;border-radius:12px;border:1px solid rgba(255,255,255,0.02)}
+
+    .log{height:340px;overflow:auto;padding:12px;background:rgba(0,0,0,0.25);border-radius:10px;font-family:monospace;color:var(--muted);font-size:13px}
+    .report{height:340px;overflow:auto;padding:12px;background:linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.005));border-radius:10px}
+
+    .small{font-size:13px;color:var(--muted)}
+    footer{margin-top:12px;display:flex;justify-content:space-between;align-items:center}
+    .split{display:flex;gap:8px}
+
+    @media (max-width:900px){.main{grid-template-columns:1fr;}.report{height:260px}.log{height:160px}}
+  </style>
+</head>
+<body>
+  <div class="app" role="application">
+    <header>
+      <div>
+        <h1>WikiResearchAssistant — HTML/CSS/JS GUI</h1>
+        <p class="lead">A small in-browser port of <code>main_wikipedia_only.py</code>. Uses only Wikipedia REST &amp; search APIs.</p>
+      </div>
+    </header>
+
+    <div class="controls">
+      <input id="topicInput" type="text" placeholder="Enter a topic (e.g. Ada Lovelace, Python (programming language))" />
+      <div style="display:flex;gap:8px">
+        <button id="runBtn">Research</button>
+        <button id="clearBtn" class="secondary">Clear</button>
+      </div>
+    </div>
+
+    <div class="main">
+      <section class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <strong>Progress log</strong>
+            <div class="small">Shows planner/search steps and status</div>
+          </div>
+          <div class="small">Politeness delay: 300ms</div>
+        </div>
+
+        <div id="log" class="log" aria-live="polite"></div>
+      </section>
+
+      <aside class="card">
+        <div>
+          <strong>Final report</strong>
+          <div class="small">Only the synthesized report (mirrors CLI behavior)</div>
+        </div>
+        <div id="report" class="report" tabindex="0"></div>
+        <footer>
+          <div class="split">
+            <button id="copyBtn" class="secondary">Copy</button>
+            <button id="downloadBtn" class="secondary">Download .txt</button>
+          </div>
+          <div class="small">Local-only. Uses the browser's network to fetch Wikipedia.</div>
+        </footer>
+      </aside>
+    </div>
+
+  </div>
+
+<script>
+// -------------------------
+// Config
+// -------------------------
+const WIKIPEDIA_SUMMARY_URL = 'https://en.wikipedia.org/api/rest_v1/page/summary/';
+const WIKIPEDIA_SEARCH_URL = 'https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch='; // add &format=json&origin=*
+const POLITENESS_MS = 300;
+
+// -------------------------
+// Utilities
+// -------------------------
+function sanitizeTopic(raw) {
+  if (!raw) return '';
+  let s = raw.trim();
+  s = s.replace(/^(who is|who was|what is|what are|tell me about|give me info on|info about)\s+/i, '');
+  return s;
+}
+function extractQueryFromQuestion(q) {
+  let s = q.trim();
+  s = s.replace(/^(who is|who was|what is|what are|tell me about|give me details on|provide info on)\s+/i, '');
+  return s.replace(/[\s\?\.]+$/,'');
+}
+
+function log(msg) {
+  const el = document.getElementById('log');
+  el.innerText += msg + '\n';
+  el.scrollTop = el.scrollHeight;
+}
+function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// -------------------------
+// Wikipedia helpers (browser-friendly)
+// -------------------------
+async function wikipediaSummary(titleOrQuery, timeout = 10000) {
+  if (!titleOrQuery) return null;
+  // Try two candidate forms: with underscores and raw
+  const candidates = [ titleOrQuery.replace(/\s+/g,'_'), titleOrQuery ];
+  for (const candidate of candidates) {
+    const url = WIKIPEDIA_SUMMARY_URL + encodeURIComponent(candidate);
+    try {
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), timeout);
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(id);
+      if (res.ok) {
+        const j = await res.json();
+        if (j.extract) return j.extract.trim();
+        if (j.description) return j.description.trim();
+      }
+    } catch (e) {
+      // network error or aborted -> treat as no result
+      return null;
+    }
+  }
+  return null;
+}
+
+async function wikipediaSearchThenSummary(query, timeout = 10000) {
+  if (!query) return null;
+  const url = WIKIPEDIA_SEARCH_URL + encodeURIComponent(query) + '&format=json&origin=*';
+  try {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeout);
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(id);
+    if (!res.ok) return null;
+    const j = await res.json();
+    const hits = j.query && j.query.search ? j.query.search : [];
+    if (!hits.length) return null;
+    const title = hits[0].title;
+    if (!title) return null;
+    return await wikipediaSummary(title, timeout);
+  } catch (e) {
+    return null;
+  }
+}
+
+// -------------------------
+// Agents
+// -------------------------
+function plannerAgent(topic) {
+  const t = sanitizeTopic(topic);
+  if (!t) return [];
+  return [
+    `Who is ${t}?`,
+    `What are the most important facts about ${t}?`,
+    `What are recent developments related to ${t}?`
+  ];
+}
+
+async function searchAgent(question) {
+  const query = extractQueryFromQuestion(question);
+  if (!query) return '(No query generated from question.)';
+
+  log(`-> Searching summary for: ${query}`);
+  let summary = await wikipediaSummary(query);
+  if (summary) return `(Wikipedia) ${summary}`;
+
+  log(`-> Summary not found, trying search fallback for: ${query}`);
+  const summary2 = await wikipediaSearchThenSummary(query);
+  if (summary2) return `(Wikipedia) ${summary2}`;
+
+  return '(Wikipedia) No article found for the query.';
+}
+
+function synthesizeReport(topic, researchResults) {
+  const topicClean = sanitizeTopic(topic);
+  let intro = `Introduction:\nThis report summarizes information about ${topicClean} using only Wikipedia content.\n\n`;
+  let findings = 'Findings:\n';
+  for (const [q, data] of researchResults) {
+    let snippet = data.trim();
+    if (snippet.length > 800) {
+      // cut at last sentence boundary within 800
+      let cut = snippet.slice(0,800);
+      const lastDot = cut.lastIndexOf('.');
+      if (lastDot > 50) cut = cut.slice(0,lastDot);
+      snippet = cut + '...';
+    }
+    findings += `- ${q}: ${snippet}\n\n`;
+  }
+  const conclusion = 'Conclusion:\nThis concludes the synthesized summary based solely on Wikipedia extracts.\n';
+  return intro + findings + conclusion;
+}
+
+// -------------------------
+// UI wiring
+// -------------------------
+document.getElementById('runBtn').addEventListener('click', async () => {
+  const topic = document.getElementById('topicInput').value.trim();
+  if (!topic) { alert('Please enter a topic.'); return; }
+
+  // reset
+  document.getElementById('log').innerText = '';
+  document.getElementById('report').innerText = '';
+
+  log(`Topic: ${topic}`);
+  const questions = plannerAgent(topic);
+  log('Planner generated questions:');
+  questions.forEach((q,i)=> log(`  ${i+1}. ${q}`));
+
+  const researchResults = [];
+  for (const q of questions) {
+    log(`\n[Question] ${q}`);
+    const ans = await searchAgent(q);
+    log(`[Answer] ${ans ? (ans.slice(0,300)+'...') : '(no answer)'}\n`);
+    researchResults.push([q, ans]);
+    await delay(POLITENESS_MS);
+  }
+
+  const finalReport = synthesizeReport(topic, researchResults);
+  document.getElementById('report').innerText = finalReport;
+  log('\n--- FINAL REPORT GENERATED ---');
+});
+
+document.getElementById('clearBtn').addEventListener('click', ()=>{
+  document.getElementById('topicInput').value = '';
+  document.getElementById('log').innerText = '';
+  document.getElementById('report').innerText = '';
+});
+
+document.getElementById('copyBtn').addEventListener('click', async ()=>{
+  const text = document.getElementById('report').innerText;
+  if (!text) { alert('Nothing to copy.'); return; }
+  try { await navigator.clipboard.writeText(text); alert('Copied to clipboard.'); } catch(e){ alert('Copy failed: '+e); }
+});
+
+document.getElementById('downloadBtn').addEventListener('click', ()=>{
+  const text = document.getElementById('report').innerText;
+  if (!text) { alert('Nothing to download.'); return; }
+  const blob = new Blob([text], {type:'text/plain;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'wikipedia_report.txt';
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+});
+
+// helpful: allow Enter key to trigger Research
+document.getElementById('topicInput').addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); document.getElementById('runBtn').click(); } });
+
+</script>
+</body>
+</html>
