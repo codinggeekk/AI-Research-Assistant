@@ -1,5 +1,4 @@
-![Uploading image.png…]()
-
+<img width="1920" height="1020" alt="Screenshot 2025-11-20 111714" src="https://github.com/user-attachments/assets/ca924258-f26b-4b7e-97fb-48ab2a674ab9" />
  # AI-Research-Assistant
 AI-Research-Assistant
 
@@ -198,4 +197,5 @@ Add local embeddings & offline mode
 📝 License
 
 You may include your preferred license here (MIT recommended).
+
 
